@@ -1,0 +1,137 @@
+---
+title: "ANZ Task 1"
+author: "Hayden Savage"
+date: "03/08/2021"
+output: pdf_document
+---
+
+```{r message = FALSE, include=FALSE, warning=FALSE}
+library(tidyverse)
+library(janitor)
+library(ggplot2)
+library(readxl)
+library(tibble)
+
+# read in data
+data = read_excel("ANZ synthesised transaction dataset.xlsx", sheet = "DSynth_Output_100c_3m_v3")
+```
+
+```{r}
+# change extraction column to date and time format
+
+ls = lapply(gsub("T", " " , data$extraction), as.POSIXct)
+vec = c()
+for (i in ls) {
+  vec = append(vec, i)
+}
+
+data$extraction = vec 
+```
+
+
+```{r}
+# Average transaction amount
+mean(data$amount)
+
+# Transactions per month
+transaction_amoount = data %>% 
+  mutate(month = format(date, "%m")) %>%
+  count(month)
+
+mean(transaction_amoount$n) # Average number of traqnsactions per month
+mean(transaction_amoount$n)/100
+
+# Age of customers
+age_data = data %>%
+  group_by(customer_id) %>%
+  summarise(age = mean(age))
+
+mean(age_data$age)
+
+sdata = data %>%
+  filter(merchant_state != "NA")
+  
+state_dat = sdata %>%
+  group_by(merchant_state) %>%
+  summarise("Proportion of transaction volume (%)" = 100*sum(amount)/sum(sdata$amount))
+
+state_dat
+```
+Average transaction amount = $187.92
+Average number of transactions per month per customer = 40
+Average customer age = 32 years old
+
+```{r}
+num_days = length(unique(data$date))
+
+hour_data = data %>% 
+  mutate(hour = format(extraction, "%H")) %>%
+  group_by(hour) %>%
+  summarise("avg" = sum(amount)/(num_days)) 
+
+ggplot(hour_data, aes(hour, avg)) +
+  geom_col(fill='lightslategray') +
+  labs(x="Hour of the day", y="Average hourly transaction volume ($)", title="Transaction volume over the course of an average day") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+hour_data2 = data %>% 
+  filter(amount < mean(amount) + sd(amount)*3) %>%
+  mutate(hour = format(extraction, "%H")) %>%
+  group_by(hour) %>%
+  summarise("avg" = sum(amount)/(num_days)) 
+
+ggplot(hour_data2, aes(hour, avg)) +
+  geom_col(fill='lightslategray') +
+  labs(x="Hour of the day", y="Average hourly transaction volume ($)", title="Transaction volume over the course of an average day (outliers removed)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r warning=FALSE}
+day_data = data %>% 
+  mutate(day = weekdays(date)) %>%
+  group_by(day, movement) %>%
+  summarise(avg = sum(amount)/(num_days/7))
+
+day_data2 = data %>% 
+  filter(amount < mean(amount) + sd(amount)*3) %>%
+  mutate(day = weekdays(date)) %>%
+  group_by(day, movement) %>%
+  summarise(avg = sum(amount)/(num_days/7))
+
+day_levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+
+day_data = day_data %>% 
+  mutate(day = factor(day, levels = day_levels))
+
+day_data2 = day_data2 %>% 
+  mutate(day = factor(day, levels = day_levels))
+
+ggplot(day_data, aes(day, avg, fill=movement)) +
+  geom_col() +
+  labs(fill="movement", x=" Day of the week", y="Average daily transaction volume ($)", title="Transaction volume over the course of an average week") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+ggplot(day_data2, aes(day, avg, fill=movement)) +
+  geom_col() +
+  labs(fill="movement", x=" Day of the week", y="Average daily transaction volume ($)", title="Transaction volume over the course of an average week (outliers removed)") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+```{r}
+state_dat = data %>%
+  filter(merchant_state != 'NA') %>%
+  filter(movement == "debit") %>%
+  group_by(merchant_state) %>%
+  summarise(avg = mean(amount))
+
+state_dat
+
+ggplot(state_dat, aes(merchant_state, avg)) +
+  geom_col(fill='cyan4') +
+  labs(x="State", y="Transaction amount ($)", title="Average transaction amount per state (spending)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+
+
