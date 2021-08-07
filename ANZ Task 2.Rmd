@@ -1,0 +1,188 @@
+---
+title: "ANZ Task 2"
+author: "Hayden Savage"
+date: "05/08/2021"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(janitor)
+library(ggplot2)
+library(reshape2)
+library(readxl)
+library(rpart)
+library(gridExtra)
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+
+
+# read in data
+data = read_excel("ANZ synthesised transaction dataset.xlsx", sheet = "DSynth_Output_100c_3m_v3")
+```
+
+```{r, warning = FALSE}
+qwe = data %>%
+  filter(movement=='credit')
+
+unique(qwe$txn_description) # all credits are salary related
+```
+
+```{r message=FALSE, warning = FALSE}
+# Salary, age and gender for each customer
+salary_data = data %>%
+  filter(movement=='credit') %>%
+  group_by(customer_id, age, gender) %>%
+  summarise(salary = sum(amount)*4)
+
+# Average monthly spending for each customer
+spending_data = data %>%
+  filter(movement=='debit') %>%
+  group_by(customer_id) %>%
+  summarise(spending = sum(amount)/3)
+
+# Average amount in savings for each customer
+savings_data = data %>%
+  group_by(customer_id) %>%
+  summarise(avg_saving = mean(balance))
+
+# Number of transactions with authorised status 
+auth_data = data %>%
+  filter(status=='authorized') %>%
+  group_by(customer_id) %>%
+  count(status, name='auth') 
+
+# Number of transactions with posted status 
+post_data = data %>%
+  filter(status=='posted') %>%
+  group_by(customer_id) %>%
+  count(status, name='post') 
+
+# Merge data frames
+ml_data = merge(merge(merge(merge(salary_data, spending_data, by='customer_id'), 
+              savings_data, by='customer_id'), auth_data, by='customer_id'),
+              post_data, by='customer_id')
+
+print(paste("Mean salary = ", mean(ml_data$salary)))
+```
+
+```{r message=FALSE, warning = FALSE}
+# Visualising correlations between salary and other customer attrubutes
+
+ggplot(ml_data, aes(salary, age)) +
+  geom_point() +
+  geom_smooth(method=lm)
+
+ggplot(ml_data, aes(salary, avg_saving)) +
+  geom_point() +
+  geom_smooth(method=lm)
+
+ggplot(ml_data, aes(salary, spending)) +
+  geom_point() +
+  geom_smooth(method=lm)
+
+ggplot(ml_data, aes(salary, auth)) +
+  geom_point() +
+  geom_smooth(method=lm)
+
+ggplot(ml_data, aes(salary, post)) +
+  geom_point() +
+  geom_smooth(method=lm)
+```
+
+
+```{r}
+# Multiple regression using all variables
+model = lm(salary ~ age + gender + spending + avg_saving + auth + post, data = ml_data)
+summary(model)
+```
+
+Variables used: age, gender, average monthly spending, avgerage savings, No. of authorised transactions, No. of posted transactions
+
+Multiple R-squared:  0.4743
+
+Adjusted R-squared:  0.4403 
+
+Residual standard error: 20170
+
+As we can see, the p-value (tests the null hypothesis that the coefficient is equal to zero) is relatively high for the variables age, gender, and average savings. This indicates that these variables are insignificant and do not contribute much to the overall performance of the model. 
+
+```{r}
+# Variable selection using AIC
+new_model = step(model, direction = "backward", trace = FALSE)
+summary(new_model)
+```
+
+Variables: average monthly spending, No. of authorised transactions, No. of posted transactions
+
+Multiple R-squared:  0.462
+Adjusted R-squared:  0.4452 
+Residual standard error: 20090
+
+Backwards stepwise variable selection was performed using the Akaike information criterion (AIC). The AIC evaluates how well a model fits the data. This model has not used the variables age, gender and average savings as they weren't the best fit for the model. A benefit of this model is that is has less complexity and is easier to interpret. This model also has a lower residual standard error and higher adjusted r-squared.
+
+```{r}
+# Naive prediction (ZeroR): predict salary to be the mean of all salaries
+error_ls = c()
+
+for (i in 1:10) {
+  d1 = ml_data[(i*10-9):(i*10),]
+  d2 = ml_data %>%
+    filter(!(customer_id %in% d1$customer_id))
+  est = mean(d2$salary)
+  test = d1 %>%
+    mutate(naive_err = abs(est-salary))
+  error_ls = append(error_ls, mean(test$naive_err))
+}
+
+mean(error_ls)
+```
+
+Above, a cross validation procedure was performed using a naive prediction. That is, the predicted salary in the test set was the mean salary in the training set. The average residual standard error for the folds was 21995.88. The residual standard error for the multiple regression model was 20090 which is a minimal improvement. Hence, ANZ should not use the regression model to segment customers as it does not accurately predict their salaries. This is because you would get a similar accuracy for just assuming a customers salary to be the mean of all the other known salaries.
+
+```{r}
+# Decision-tree based model
+set.seed(20)
+
+tree = rpart(salary ~ spending + auth + post + age + gender + avg_saving, 
+             method = "anova", data = ml_data)
+
+printcp(tree)
+
+# Pruning the tree
+pruned_tree = prune(tree,cp=tree$cptable[which.min(tree$cptable[,"xerror"]),"CP"])
+fancyRpartPlot(pruned_tree, caption = NULL)
+title("Pruned decision tree for predicting salary", adj = .5)
+
+residual_std = sd(residuals(pruned_tree))
+print(paste("Residual standard error = ", residual_std))
+
+r_squared = 1 - tail(pruned_tree$cptable[,"rel error"], n=1)
+print(paste("R-squared = ", as.numeric(r_squared)))
+```
+
+Cross validation is needed to test the performance of a decision tree, however, rpart already has built-in cross validation. The original tree is also pruned to avoid overfitting. This is done by selecting the tree size that minimises the cross validation error. The decision tree was given all the variables from the first regression model, however, the pruned decision tree only used the variables 'No. of posted transactions', and 'average savings' which was different from the regression model. 
+
+Pruned tree:
+
+Residual standard error = 17499.67
+
+R-squared = 0.5789
+
+As we can see, the performance of this decision tree is better than the multiple regression model as it has a lower residual standard error and a higher r-squared. 
+
+
+All my code for the DATA@ANZ program can be found at https://github.com/savage64/ANZ
+
+
+
+
+
+
+
+
+
+
